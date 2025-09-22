@@ -2,7 +2,20 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
-First, run the development server:
+## Environment configuration
+
+Copy the provided `.env.example` file to `.env.local` and fill in the required values before running the application:
+
+```
+cp .env.example .env.local
+```
+
+The project expects the following environment variables:
+
+- `AUTH_SECRET` (or `NEXTAUTH_SECRET`): a long random string used by NextAuth.js to sign cookies and JSON Web Tokens. This **must** be configured in production (e.g. Vercel) to avoid the `GET /api/auth/error 500` configuration error.
+- `NEXT_PUBLIC_MAPBOX_TOKEN`: a public Mapbox access token used to render the interactive map. Make sure the token allows requests from your deployed domain.
+
+After updating the `.env.local` file you can run the development server:
 
 ```bash
 npm run dev

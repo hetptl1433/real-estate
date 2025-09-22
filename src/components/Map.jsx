@@ -21,6 +21,31 @@ export default function MapboxMap({ initialView = DEFAULT_VIEW, pins = demoPins 
   const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
   const [popupInfo, setPopupInfo] = useState(null);
 
+  if (!token) {
+    return (
+      <Box
+        sx={{
+          height: '100%',
+          minHeight: 400,
+          borderRadius: 2,
+          border: '1px solid',
+          borderColor: 'divider',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          textAlign: 'center',
+          p: 3,
+          bgcolor: 'background.paper'
+        }}
+      >
+        <Typography variant="body2" color="text.secondary">
+          Map rendering is disabled because the <code>NEXT_PUBLIC_MAPBOX_TOKEN</code> environment variable is not
+          configured. Add a Mapbox public access token in your deployment settings to display the interactive map.
+        </Typography>
+      </Box>
+    );
+  }
+
   const mapStyle = useMemo(
     () => 'mapbox://styles/mapbox/streets-v12',
     []

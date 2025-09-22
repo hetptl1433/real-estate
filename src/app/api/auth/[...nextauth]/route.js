@@ -1,6 +1,17 @@
 import NextAuth from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 
+const authSecret =
+  process.env.AUTH_SECRET ??
+  process.env.NEXTAUTH_SECRET ??
+  (process.env.NODE_ENV === "development" ? "dev-nextauth-secret" : undefined);
+
+if (!authSecret) {
+  throw new Error(
+    "Missing AUTH_SECRET (or NEXTAUTH_SECRET). Set it in your environment variables before deploying."
+  );
+}
+
 export const authOptions = {
   providers: [
     CredentialsProvider({
@@ -25,6 +36,7 @@ export const authOptions = {
   session: {
     strategy: "jwt"
   },
+  secret: authSecret,
   pages: {
     signIn: "/auth/signin"
   }
