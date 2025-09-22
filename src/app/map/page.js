@@ -1,7 +1,7 @@
 'use client';
 
-import Layout from '@/components/Layout';
-import MapboxMap from '@/components/Map';
+import Layout from '../../components/Layout';
+import MapboxMap from '../../components/Map';
 import { Box, Typography } from '@mui/material';
 
 export default function MapPage() {

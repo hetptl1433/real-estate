@@ -3,7 +3,7 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 import './globals.css';
 
 import { Geist, Geist_Mono } from 'next/font/google';
-import AuthProvider from '@/components/AuthProvider';
+import AuthProvider from '../components/AuthProvider';
 
 // If you’re using MUI theme (optional but recommended)
 // import { ThemeProvider, CssBaseline } from '@mui/material';
