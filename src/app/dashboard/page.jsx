@@ -15,7 +15,6 @@ export default async function DashboardPage() {
       <p>This page is protected and only visible to logged-in users.</p>
       <hr style={{ margin: '24px 0' }} />
       <h2>Nearby Tax Assessors</h2>
-      <TaxAssessors />
     </div>
   );
 }
