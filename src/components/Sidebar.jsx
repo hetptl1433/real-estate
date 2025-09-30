@@ -4,12 +4,14 @@ import { Box, List, ListItemButton, ListItemText } from '@mui/material';
 
 const items = [
   { label: 'Home', href: '/' },
+   { label: 'Map', href: '/map' },
   { label: 'Properties', href: '/properties' },
   { label: 'Tenants', href: '/tenants' },
   { label: 'Leases', href: '/leases' },
   { label: 'Payments', href: '/payments' },
   { label: 'Reports', href: '/reports' },
   { label: 'Support', href: '/support' },
+
   { label: 'Settings', href: '/settings' },
 ];
 
