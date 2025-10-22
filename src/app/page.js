@@ -12,8 +12,6 @@ export default function HomePage() {
         <Typography variant="h5" gutterBottom>Dashboard</Typography>
         <Typography>Welcome! your one stop solution for all Real-Estate needs with power of AI</Typography>
         <Box sx={{ mt: 3 }}>
-          <Typography variant="h6" gutterBottom>Tax Assessors</Typography>
-          <TaxAssessors />
         </Box>
       </Box>
     </Layout>

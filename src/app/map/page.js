@@ -19,7 +19,7 @@ export default function MapPage() {
       <Box sx={{ p: 3, display: 'grid', gap: 2 }}>
         <Typography variant="h5">Real Estate Map</Typography>
         <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-          Chicago Area 
+          New York Area
         </Typography>
         {/* Hidden data loader that fetches assessors and passes GeoJSON up */}
         <TaxAssessors renderList={false} onData={handleData} />
