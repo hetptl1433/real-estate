@@ -2,9 +2,11 @@
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import Map, { Marker, Popup, NavigationControl, ScaleControl, Source, Layer } from 'react-map-gl';
-import { Box, Typography } from '@mui/material';
-import { useQuery } from '@apollo/client/react';
+import { Box, Typography, Autocomplete, TextField, CircularProgress, Dialog, DialogTitle, DialogContent } from '@mui/material';
+import { useQuery, useLazyQuery } from '@apollo/client/react';
 import { GET_REONOMY_PROPERTIES } from '../lib/queries/reonomyProperties';
+import { GET_PARCEL_BY_LOCATION } from '../lib/queries/getParcelByLocation';
+import { DEFAULT_SETTINGS, readStoredSettings, SETTINGS_STORAGE_KEY } from '../lib/userSettings';
 
 const DEFAULT_VIEW = {
   latitude: 40.7128,   // New York, NY
@@ -19,8 +21,16 @@ const demoPins = [
   { id: 'p3', name: 'Praire shores ', lat: 41.86,  lng: -87.62, note: 'South loop' }
 ];
 
-export default function MapboxMap({ initialView = DEFAULT_VIEW, pins = demoPins, geojson = null, enableTerrain = false, autoFitGeojson = true }) {
+export default function MapboxMap({
+  initialView = DEFAULT_VIEW,
+  pins = demoPins,
+  geojson = null,
+  enableTerrain = false,
+  autoFitGeojson = true,
+  onLocationChange = null,
+}) {
   const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+  const googleMapsApiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
   const [popupInfo, setPopupInfo] = useState(null);
   const mapRef = useRef(null);
   const [hoverInfo, setHoverInfo] = useState(null);
@@ -29,6 +39,103 @@ export default function MapboxMap({ initialView = DEFAULT_VIEW, pins = demoPins,
   const selectedParcelIdRef = useRef(null);
   const [hoveredParcelId, setHoveredParcelId] = useState(null);
   const [hoverGeom, setHoverGeom] = useState(null);
+  const [searchInput, setSearchInput] = useState('');
+  const [searchOptions, setSearchOptions] = useState([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState(null);
+  const [googleReady, setGoogleReady] = useState(false);
+  const geocoderRef = useRef(null);
+  const autocompleteServiceRef = useRef(null);
+  const autocompleteSeqRef = useRef(0);
+  const [lastResolvedLocation, setLastResolvedLocation] = useState(null);
+  const [shouldOpenStreetView, setShouldOpenStreetView] = useState(false);
+  const [streetViewOpen, setStreetViewOpen] = useState(false);
+  const [streetViewLocation, setStreetViewLocation] = useState(null);
+  const [streetViewAddress, setStreetViewAddress] = useState('');
+  const [autoStreetViewEnabled, setAutoStreetViewEnabled] = useState(() => {
+    if (typeof window === 'undefined') return DEFAULT_SETTINGS.autoOpenStreetView;
+    return readStoredSettings().autoOpenStreetView;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const refresh = () => {
+      setAutoStreetViewEnabled(readStoredSettings().autoOpenStreetView);
+    };
+    refresh();
+    const handleStorage = (event) => {
+      if (!event || event.key === SETTINGS_STORAGE_KEY) {
+        refresh();
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (autoStreetViewEnabled && selectedParcelId && lastResolvedLocation) {
+      setShouldOpenStreetView(true);
+    }
+  }, [autoStreetViewEnabled, selectedParcelId, lastResolvedLocation]);
+  const [fetchParcelByLocation, { loading: parcelLookupLoading, error: parcelLookupError }] = useLazyQuery(
+    GET_PARCEL_BY_LOCATION,
+    { fetchPolicy: 'network-only' }
+  );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!googleMapsApiKey) {
+      setSearchError('Google Maps API key missing. Address search unavailable.');
+      return;
+    }
+
+    const initGoogle = () => {
+      if (!window.google?.maps) return;
+      geocoderRef.current = geocoderRef.current || new window.google.maps.Geocoder();
+      if (window.google.maps.places) {
+        autocompleteServiceRef.current =
+          autocompleteServiceRef.current || new window.google.maps.places.AutocompleteService();
+      }
+      setGoogleReady(true);
+      setSearchError(null);
+    };
+
+    if (window.google?.maps?.places) {
+      initGoogle();
+      return;
+    }
+
+    const scriptId = 'google-maps-sdk';
+    const existingScript = document.getElementById(scriptId);
+    if (existingScript) {
+      const onExistingLoad = () => initGoogle();
+      existingScript.addEventListener('load', onExistingLoad);
+      return () => {
+        existingScript.removeEventListener('load', onExistingLoad);
+      };
+    }
+
+    const script = document.createElement('script');
+    script.id = scriptId;
+    script.async = true;
+    script.defer = true;
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${googleMapsApiKey}&libraries=places`;
+    const handleLoad = () => initGoogle();
+    const handleError = () => {
+      setGoogleReady(false);
+      setSearchError('Unable to load Google Maps. Please try again later.');
+    };
+    script.addEventListener('load', handleLoad);
+    script.addEventListener('error', handleError);
+    document.head.appendChild(script);
+
+    return () => {
+      script.removeEventListener('load', handleLoad);
+      script.removeEventListener('error', handleError);
+    };
+  }, [googleMapsApiKey]);
   const getFeatureId = useCallback((feature) => {
     if (!feature) return null;
     const propId = feature.properties?.ID;
@@ -90,6 +197,212 @@ export default function MapboxMap({ initialView = DEFAULT_VIEW, pins = demoPins,
     selectedParcelIdRef.current = id;
     setSelectedParcelId(id);
   }, [clearParcelSelection]);
+
+  const fetchPlacePredictions = useCallback(
+    (input) =>
+      new Promise((resolve, reject) => {
+        const service = autocompleteServiceRef.current;
+        if (!service || !window.google?.maps?.places) {
+          resolve([]);
+          return;
+        }
+        const requestId = ++autocompleteSeqRef.current;
+        service.getPlacePredictions(
+          {
+            input,
+            componentRestrictions: { country: 'us' },
+          },
+          (predictions, status) => {
+            if (requestId !== autocompleteSeqRef.current) return;
+            if (
+              status !== window.google.maps.places.PlacesServiceStatus.OK &&
+              status !== window.google.maps.places.PlacesServiceStatus.ZERO_RESULTS
+            ) {
+              reject(new Error('Unable to fetch address suggestions.'));
+              return;
+            }
+            if (!predictions || predictions.length === 0) {
+              resolve([]);
+              return;
+            }
+            resolve(
+              predictions.map((prediction) => ({
+                label: prediction.description,
+                placeId: prediction.place_id,
+              }))
+            );
+          }
+        );
+      }),
+    []
+  );
+
+  const geocodeRequest = useCallback(
+    (params) =>
+      new Promise((resolve, reject) => {
+        const geocoder = geocoderRef.current;
+        if (!geocoder) {
+          reject(new Error('Google geocoder unavailable.'));
+          return;
+        }
+
+        geocoder.geocode(params, (results, status) => {
+          if (status !== 'OK' || !results?.length) {
+            reject(new Error('No matching address found.'));
+            return;
+          }
+          const best = results[0];
+          const location = best?.geometry?.location;
+          const lat = location?.lat();
+          const lng = location?.lng();
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+            reject(new Error('Invalid coordinates returned for that address.'));
+            return;
+          }
+          const components = Array.isArray(best?.address_components) ? best.address_components : [];
+          const findComponent = (...types) => {
+            const match = components.find((component) => types.some((type) => component.types?.includes(type)));
+            return match?.long_name ?? null;
+          };
+          const stateComponent = components.find((component) =>
+            component.types?.includes('administrative_area_level_1')
+          );
+          resolve({
+            lat,
+            lng,
+            address: best.formatted_address ?? params.address ?? '',
+            city: findComponent('locality', 'postal_town', 'sublocality', 'administrative_area_level_2'),
+            state: stateComponent?.short_name ?? stateComponent?.long_name ?? null,
+          });
+        });
+      }),
+    []
+  );
+
+  const handleResolvedLocation = useCallback(
+    async ({ lat, lng, address, city, state }) => {
+      const map = mapRef.current?.getMap?.() ?? mapRef.current;
+      if (map && Number.isFinite(lat) && Number.isFinite(lng)) {
+        try {
+          map.flyTo({ center: [lng, lat], zoom: Math.max(map.getZoom?.() ?? 16, 16), duration: 1200 });
+        } catch {}
+      }
+
+      const locationPayload = { lat, lng, address, city: city ?? null, state: state ?? null };
+      setLastResolvedLocation(locationPayload);
+      if (typeof onLocationChange === 'function') {
+        onLocationChange(locationPayload);
+      }
+      setSearchError(null);
+
+      try {
+        const { data } = await fetchParcelByLocation({
+          variables: { latitude: lat, longitude: lng },
+        });
+        const parcelId = data?.executeGetParcelByLocation?.parcel_id ?? null;
+        if (parcelId) {
+          selectParcelById(parcelId);
+          if (autoStreetViewEnabled) {
+            setShouldOpenStreetView(true);
+          } else {
+            setShouldOpenStreetView(false);
+          }
+        } else {
+          setSearchError('No parcel found for that location.');
+          setShouldOpenStreetView(false);
+          selectParcelById(null);
+        }
+      } catch (error) {
+        console.error(error);
+        let friendlyMessage =
+          error?.graphQLErrors?.[0]?.message ??
+          (typeof error?.message === 'string' ? error.message : null);
+
+        if (!friendlyMessage && error?.networkError?.statusCode === 400) {
+          friendlyMessage = 'No parcel found for that location.';
+        } else if (friendlyMessage === 'Response not successful: Received status code 400') {
+          friendlyMessage = 'No parcel found for that location.';
+        }
+
+        setSearchError(friendlyMessage ?? 'Unable to look up parcel for that location.');
+        setShouldOpenStreetView(false);
+        selectParcelById(null);
+      }
+    },
+    [autoStreetViewEnabled, fetchParcelByLocation, onLocationChange, selectParcelById]
+  );
+
+  const handleSearchSelection = useCallback(
+    async (_event, option) => {
+      if (!option) return;
+      const selection = typeof option === 'string' ? { label: option, placeId: null } : option;
+      if (!selection.placeId && !selection.label) return;
+      setSearchLoading(true);
+      try {
+        const result = await geocodeRequest(
+          selection.placeId ? { placeId: selection.placeId } : { address: selection.label }
+        );
+        setSearchInput(selection.label ?? '');
+        setSearchOptions([]);
+        await handleResolvedLocation(result);
+      } catch (error) {
+        setSearchError(error?.message ?? 'Unable to resolve that address.');
+      } finally {
+        setSearchLoading(false);
+      }
+    },
+    [geocodeRequest, handleResolvedLocation]
+  );
+
+  const handleInputChange = useCallback(
+    async (_event, value, reason) => {
+      setSearchInput(value);
+      if (reason === 'clear') {
+        setSearchOptions([]);
+        setSearchError(null);
+        return;
+      }
+      if (reason !== 'input') return;
+      if (!value || !googleReady) {
+        setSearchOptions([]);
+        return;
+      }
+
+      setSearchLoading(true);
+      try {
+        const predictions = await fetchPlacePredictions(value);
+        setSearchOptions(predictions);
+      } catch (error) {
+        setSearchOptions([]);
+        setSearchError(error?.message ?? 'Unable to load suggestions.');
+      } finally {
+        setSearchLoading(false);
+      }
+    },
+    [fetchPlacePredictions, googleReady]
+  );
+
+  const handleSearchSubmit = useCallback(
+    async (event) => {
+      event.preventDefault();
+      if (!searchInput?.trim()) return;
+      if (!googleReady) {
+        setSearchError('Google Maps is still loading. Please try again in a moment.');
+        return;
+      }
+      setSearchLoading(true);
+      try {
+        const result = await geocodeRequest({ address: searchInput.trim() });
+        setSearchOptions([]);
+        await handleResolvedLocation(result);
+      } catch (error) {
+        setSearchError(error?.message ?? 'Unable to resolve that address.');
+      } finally {
+        setSearchLoading(false);
+      }
+    },
+    [geocodeRequest, googleReady, handleResolvedLocation, searchInput]
+  );
 
   const mapStyle = useMemo(
     () => 'mapbox://styles/mapbox/streets-v12',
@@ -195,26 +508,101 @@ export default function MapboxMap({ initialView = DEFAULT_VIEW, pins = demoPins,
     ? [selectedProperty.commercial_overlay_1, selectedProperty.commercial_overlay_2].filter(Boolean)
     : [];
 
+  useEffect(() => {
+    if (!shouldOpenStreetView || !selectedParcelId) return;
+    let lat = null;
+    let lng = null;
+    let address = null;
+
+    if (lastResolvedLocation) {
+      lat = lastResolvedLocation.lat;
+      lng = lastResolvedLocation.lng;
+      address = lastResolvedLocation.address;
+    } else if (selectedProperty) {
+      const candidateLat = Number(selectedProperty.lat ?? selectedProperty.latitude);
+      const candidateLng = Number(selectedProperty.lon ?? selectedProperty.longitude);
+      if (Number.isFinite(candidateLat) && Number.isFinite(candidateLng)) {
+        lat = candidateLat;
+        lng = candidateLng;
+        address = addressLine1 ?? selectedProperty.PropertyAddressFull ?? null;
+      }
+    }
+
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return;
+    }
+
+    setStreetViewLocation({ lat, lng });
+    setStreetViewAddress(address ?? locationLine ?? '');
+    setStreetViewOpen(true);
+    setShouldOpenStreetView(false);
+  }, [addressLine1, lastResolvedLocation, locationLine, selectedParcelId, selectedProperty, shouldOpenStreetView]);
+
   return (
-    <Box
-      sx={{
-        display: 'flex',
-        flexDirection: { xs: 'column', md: 'row' },
-        gap: 2,
-        height: '100%',
-        minHeight: 400,
-      }}
-    >
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, height: '100%' }}>
+      <Box
+        component="form"
+        noValidate
+        onSubmit={handleSearchSubmit}
+        sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}
+      >
+        <Autocomplete
+          options={searchOptions}
+          freeSolo
+          value={null}
+          inputValue={searchInput}
+          onInputChange={handleInputChange}
+          onChange={handleSearchSelection}
+          loading={searchLoading || parcelLookupLoading}
+          filterOptions={(options) => options}
+          getOptionLabel={(option) => (typeof option === 'string' ? option : option.label ?? '')}
+          isOptionEqualToValue={(option, value) =>
+            (typeof option === 'string' ? option : option.label) ===
+            (typeof value === 'string' ? value : value.label)
+          }
+          ListboxProps={{ style: { maxHeight: 240 } }}
+          noOptionsText={googleReady ? 'No suggestions' : 'Loading Google Maps…'}
+          disabled={!googleMapsApiKey}
+          renderInput={(params) => (
+            <TextField
+              {...params}
+              label="Search by address"
+              placeholder="Start typing an address"
+              InputProps={{
+                ...params.InputProps,
+                endAdornment: (
+                  <>
+                    {(searchLoading || parcelLookupLoading) && (
+                      <CircularProgress color="inherit" size={18} sx={{ mr: 1 }} />
+                    )}
+                    {params.InputProps.endAdornment}
+                  </>
+                ),
+              }}
+            />
+          )}
+        />
+      </Box>
+
       <Box
         sx={{
-          position: 'relative',
+          display: 'flex',
+          flexDirection: { xs: 'column', md: 'row' },
+          gap: 2,
           flex: 1,
-          minHeight: { xs: 360, md: 400 },
-          borderRadius: 2,
-          overflow: 'hidden',
+          minHeight: 400,
         }}
-        data-selected-parcel={selectedParcelId ?? undefined}
       >
+        <Box
+          sx={{
+            position: 'relative',
+            flex: 1,
+            minHeight: { xs: 360, md: 400 },
+            borderRadius: 2,
+            overflow: 'hidden',
+          }}
+          data-selected-parcel={selectedParcelId ?? undefined}
+        >
         <Map
           ref={mapRef}
           initialViewState={initialView}
@@ -573,9 +961,9 @@ export default function MapboxMap({ initialView = DEFAULT_VIEW, pins = demoPins,
               Parcel ID: {selectedParcelId}
             </Typography>
 
-            {propertyLoading && (
+            {(propertyLoading || parcelLookupLoading) && (
               <Typography variant="body2" sx={{ mt: 2 }} color="text.secondary">
-                Loading property details…
+                Loading data…
               </Typography>
             )}
 
@@ -677,6 +1065,36 @@ export default function MapboxMap({ initialView = DEFAULT_VIEW, pins = demoPins,
           </Typography>
         )}
       </Box>
+      </Box>
+
+      <Dialog
+        open={streetViewOpen}
+        onClose={() => setStreetViewOpen(false)}
+        fullWidth
+        maxWidth="md"
+        aria-labelledby="street-view-dialog-title"
+      >
+        <DialogTitle id="street-view-dialog-title">{streetViewAddress || 'Street View'}</DialogTitle>
+        <DialogContent sx={{ p: 0 }}>
+          {streetViewLocation && googleMapsApiKey ? (
+            <Box
+              component="iframe"
+              src={`https://www.google.com/maps/embed/v1/streetview?key=${googleMapsApiKey}&location=${streetViewLocation.lat},${streetViewLocation.lng}&fov=80`}
+              width="100%"
+              height="420"
+              style={{ border: 0 }}
+              allowFullScreen
+              loading="lazy"
+            />
+          ) : (
+            <Box sx={{ p: 2 }}>
+              <Typography variant="body2" color="text.secondary">
+                Street View is unavailable for this location.
+              </Typography>
+            </Box>
+          )}
+        </DialogContent>
+      </Dialog>
     </Box>
   );
 }
