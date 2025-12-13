@@ -51,7 +51,7 @@ export default function Header() {
                 Real-Estate Analyzer
               </Typography>
               <Typography variant="subtitle2" sx={{ color: '#718096', fontWeight: 400, letterSpacing: 0.5, lineHeight: 1.2 }}>
-                Your smart property insights
+                Owned and operated by HP Tech
               </Typography>
             </Box>
           </Box>
